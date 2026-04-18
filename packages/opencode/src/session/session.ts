@@ -158,6 +158,37 @@ export const Info = z
   })
 export type Info = z.output<typeof Info>
 
+const Summary = z
+  .object({
+    additions: z.number(),
+    deletions: z.number(),
+    files: z.number(),
+    diffs: Snapshot.FileDiff.array().optional(),
+  })
+  .optional()
+
+const Share = z
+  .object({
+    url: z.string(),
+  })
+  .optional()
+
+const Time = z.object({
+  created: z.number(),
+  updated: z.number(),
+  compacting: z.number().optional(),
+  archived: z.number().optional(),
+})
+
+const Revert = z
+  .object({
+    messageID: MessageID.zod,
+    partID: PartID.zod.optional(),
+    snapshot: z.string().optional(),
+    diff: z.string().optional(),
+  })
+  .optional()
+
 export const ProjectInfo = z
   .object({
     id: ProjectID.zod,
@@ -180,7 +211,7 @@ export const CreateInput = z
   .object({
     parentID: SessionID.zod.optional(),
     title: z.string().optional(),
-    permission: Info.shape.permission,
+    permission: Permission.Ruleset.zod.optional(),
     workspaceID: WorkspaceID.zod.optional(),
   })
   .optional()
@@ -195,8 +226,8 @@ export const SetArchivedInput = z.object({ sessionID: SessionID.zod, time: z.num
 export const SetPermissionInput = z.object({ sessionID: SessionID.zod, permission: Permission.Ruleset.zod })
 export const SetRevertInput = z.object({
   sessionID: SessionID.zod,
-  revert: Info.shape.revert,
-  summary: Info.shape.summary,
+  revert: Revert,
+  summary: Summary,
 })
 export const MessagesInput = z.object({ sessionID: SessionID.zod, limit: z.number().optional() })
 
@@ -217,8 +248,8 @@ export const Event = {
     schema: z.object({
       sessionID: SessionID.zod,
       info: updateSchema(Info).extend({
-        share: updateSchema(Info.shape.share.unwrap()).optional(),
-        time: updateSchema(Info.shape.time).optional(),
+        share: updateSchema(Share.unwrap()).optional(),
+        time: updateSchema(Time).optional(),
       }),
     }),
     busSchema: z.object({
@@ -246,7 +277,7 @@ export const Event = {
     "session.error",
     z.object({
       sessionID: SessionID.zod.optional(),
-      error: MessageV2.Assistant.shape.error,
+      error: z.custom<MessageV2.Assistant["error"]>().optional(),
     }),
   ),
 }
