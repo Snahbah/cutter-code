@@ -17,6 +17,8 @@ import { lazy } from "@/util/lazy"
 import { Effect, Option } from "effect"
 import { Agent } from "@/agent/agent"
 import { jsonRequest, runRequest } from "./trace"
+import { MessageID, SessionID } from "@/session/schema"
+import { Effect as EffectCore } from "effect"
 
 const ConsoleOrgOption = z.object({
   accountID: z.string(),
@@ -49,6 +51,15 @@ const ToolExecuteInput = z.object({
   args: z.record(z.string(), z.any()).meta({
     description: "Tool-specific arguments.",
   }),
+  sessionID: z.string().meta({
+    description:
+      "Existing session ID for Context construction. Caller manages session lifecycle (create via POST /session, reuse across calls for audit trail).",
+  }),
+  agent: z.string().meta({
+    description: "Agent name for tool filtering and permission scope (e.g. writer, explorer).",
+  }),
+  providerID: ProviderID.zod,
+  modelID: ModelID.zod,
   correlation_id: z.string().optional().meta({
     description:
       "Caller-side ID for tying log lines and bus events to this invocation.",
@@ -509,12 +520,92 @@ export const ExperimentalRoutes = lazy(() =>
         },
       }),
       validator("json", ToolExecuteInput),
-      async (c) => {
-        c.status(501)
-        return c.json({
-          error: "experimental.tool.execute — route stub; implementation pending",
-        })
-      },
+      async (c) =>
+        jsonRequest("ExperimentalRoutes.tool.execute", c, function* () {
+          const body = c.req.valid("json")
+          const start = Date.now()
+
+          // Validate the session exists — cheap check that the caller is
+          // managing session lifecycle. Tools use sessionID in their Context
+          // for message allocation and bus correlation.
+          const sessions = yield* Session.Service
+          yield* sessions.get(SessionID.make(body.sessionID))
+
+          // Resolve the agent + tool set for this provider/model. ToolRegistry
+          // filters tools per (provider, model, agent) — we honour that here.
+          const agents = yield* Agent.Service
+          const agentInfo = yield* agents.get(body.agent)
+          const registry = yield* ToolRegistry.Service
+          const tools = yield* registry.tools({
+            providerID: ProviderID.make(body.providerID),
+            modelID: ModelID.make(body.modelID),
+            agent: agentInfo,
+          })
+
+          const def = tools.find((t) => t.id === body.tool)
+          if (!def) {
+            return {
+              ok: false,
+              output: "",
+              error: `unknown tool '\${body.tool}' for agent '\${body.agent}' on \${body.providerID}/\${body.modelID}`,
+              duration_ms: Date.now() - start,
+            }
+          }
+
+          // Validate args against the tool's zod schema. The tool itself
+          // would also validate, but giving an explicit error here avoids
+          // downstream tools surfacing cryptic zod errors as strings.
+          const parsed = def.parameters.safeParse(body.args)
+          if (!parsed.success) {
+            return {
+              ok: false,
+              output: "",
+              error: `args failed validation: \${parsed.error.message}`,
+              duration_ms: Date.now() - start,
+            }
+          }
+
+          // Construct minimal Context. First-pass MVP:
+          // - metadata is no-op (nothing stores per-tool metadata on this path yet)
+          // - ask rejects every permission request (destructive tools won't run
+          //   via this route until a bus-routing implementation lands)
+          // - abort signal is a fresh unused one
+          const abort = new AbortController()
+          const messageID = MessageID.ascending()
+          const ctx = {
+            sessionID: SessionID.make(body.sessionID),
+            messageID,
+            agent: body.agent,
+            abort: abort.signal,
+            callID: body.correlation_id,
+            messages: [],
+            metadata: () => EffectCore.void,
+            ask: () =>
+              EffectCore.fail(
+                new Error(
+                  "permission asks are not yet routed on /experimental/tool/execute — destructive tools cannot run via this path",
+                ) as never,
+              ),
+          } as any
+
+          try {
+            const result = yield* def.execute(parsed.data, ctx)
+            return {
+              ok: true,
+              output: result.output,
+              structured: result.metadata ?? undefined,
+              duration_ms: Date.now() - start,
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            return {
+              ok: false,
+              output: "",
+              error: msg,
+              duration_ms: Date.now() - start,
+            }
+          }
+        }),
     )
     .post(
       "/task/spawn",
