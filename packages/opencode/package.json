@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "prepare": "effect-language-service patch || true",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test --timeout 30000",
     "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "build": "bun run script/build.ts",

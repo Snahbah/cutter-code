@@ -109,7 +109,7 @@ export const layer: Layer.Layer<Service> = Layer.effect(
       ),
     )
 
-    const persistToken = Effect.fn("AccountRepo.persistToken")((input) =>
+    const persistToken = Effect.fn("AccountRepo.persistToken")((input: Parameters<Interface["persistToken"]>[0]) =>
       query((db) =>
         db
           .update(AccountTable)
@@ -123,7 +123,7 @@ export const layer: Layer.Layer<Service> = Layer.effect(
       ).pipe(Effect.asVoid),
     )
 
-    const persistAccount = Effect.fn("AccountRepo.persistAccount")((input) =>
+    const persistAccount = Effect.fn("AccountRepo.persistAccount")((input: Parameters<Interface["persistAccount"]>[0]) =>
       tx((db) => {
         const url = normalizeServerUrl(input.url)
 
