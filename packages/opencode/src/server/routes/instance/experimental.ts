@@ -19,6 +19,10 @@ import { Agent } from "@/agent/agent"
 import { jsonRequest, runRequest } from "./trace"
 import { MessageID, SessionID } from "@/session/schema"
 import { Effect as EffectCore } from "effect"
+import { SessionShare } from "@/share"
+import { SessionPrompt } from "@/session/prompt"
+import { Bus } from "@/bus"
+import { NamedError } from "@opencode-ai/shared/util/error"
 
 const ConsoleOrgOption = z.object({
   accountID: z.string(),
@@ -628,12 +632,52 @@ export const ExperimentalRoutes = lazy(() =>
         },
       }),
       validator("json", TaskSpawnInput),
-      async (c) => {
-        c.status(501)
-        return c.json({
-          error: "experimental.task.spawn � route stub; implementation pending",
-        })
-      },
+      async (c) =>
+        jsonRequest("ExperimentalRoutes.task.spawn", c, function* () {
+          const body = c.req.valid("json")
+          const spawned_at = Date.now()
+
+          // Create the child session. title is the description so the
+          // session list surface ("what's running") shows meaningful labels.
+          const share = yield* SessionShare.Service
+          const session = yield* share.create({ title: body.description })
+
+          // Fire the prompt fire-and-forget, same pattern as
+          // /session/:id/prompt_async (session.ts:892). Callers follow the
+          // child's progress by subscribing to /event filtered by sessionID,
+          // and read the final output from the session's messages when
+          // message.updated fires with time.completed set.
+          const promptParts: Array<{ type: "text"; text: string }> = [
+            { type: "text", text: body.prompt },
+          ]
+          const sessionID = session.id
+          void runRequest(
+            "ExperimentalRoutes.task.spawn.prompt",
+            c,
+            SessionPrompt.Service.use((svc) =>
+              svc.prompt({
+                sessionID,
+                agent: body.subagent_type,
+                model: body.model,
+                parts: promptParts,
+              }),
+            ),
+          ).catch((err) => {
+            // Surface child-session failures onto the bus so followers see them.
+            void Bus.publish(Session.Event.Error, {
+              sessionID,
+              error: new NamedError.Unknown({
+                message: err instanceof Error ? err.message : String(err),
+              }).toObject(),
+            })
+          })
+
+          return {
+            task_id: sessionID,
+            session_id: sessionID,
+            spawned_at,
+          }
+        }),
     )
     .post(
       "/mcp/invoke",
