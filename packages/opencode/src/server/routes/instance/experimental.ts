@@ -42,7 +42,7 @@ const ConsoleSwitchBody = z.object({
 // See cutter-core/docs/stream-a-opencode-gap.md for the full rationale.
 // These routes let callers (cutter-core _think, the operational dashboard)
 // invoke tools / spawn tasks / call MCP servers without triggering OpenCode's
-// own agent loop. Stubs only in this commit — implementations follow.
+// own agent loop. Stubs only in this commit ï¿½ implementations follow.
 
 const ToolExecuteInput = z.object({
   tool: z.string().meta({
@@ -113,14 +113,16 @@ const McpInvokeInput = z.object({
     description: "Method on the MCP server to invoke.",
   }),
   params: z.record(z.string(), z.any()),
-  correlation_id: z.string().optional(),
+  correlation_id: z.string().optional().meta({
+    description: "Caller-side ID for tying log lines to this invocation.",
+  }),
 })
 
 // Stub response for routes that are registered but not yet implemented.
 // Used by the three thin-server routes below until their handlers land.
 const NotImplementedResponse = {
   501: {
-    description: "Route stub — implementation pending.",
+    description: "Route stub ï¿½ implementation pending.",
     content: {
       "application/json": {
         schema: resolver(z.object({ error: z.string() })),
@@ -525,14 +527,14 @@ export const ExperimentalRoutes = lazy(() =>
           const body = c.req.valid("json")
           const start = Date.now()
 
-          // Validate the session exists — cheap check that the caller is
+          // Validate the session exists ï¿½ cheap check that the caller is
           // managing session lifecycle. Tools use sessionID in their Context
           // for message allocation and bus correlation.
           const sessions = yield* Session.Service
           yield* sessions.get(SessionID.make(body.sessionID))
 
           // Resolve the agent + tool set for this provider/model. ToolRegistry
-          // filters tools per (provider, model, agent) — we honour that here.
+          // filters tools per (provider, model, agent) ï¿½ we honour that here.
           const agents = yield* Agent.Service
           const agentInfo = yield* agents.get(body.agent)
           const registry = yield* ToolRegistry.Service
@@ -547,7 +549,7 @@ export const ExperimentalRoutes = lazy(() =>
             return {
               ok: false,
               output: "",
-              error: `unknown tool '\${body.tool}' for agent '\${body.agent}' on \${body.providerID}/\${body.modelID}`,
+              error: `unknown tool '${body.tool}' for agent '${body.agent}' on ${body.providerID}/${body.modelID}`,
               duration_ms: Date.now() - start,
             }
           }
@@ -560,7 +562,7 @@ export const ExperimentalRoutes = lazy(() =>
             return {
               ok: false,
               output: "",
-              error: `args failed validation: \${parsed.error.message}`,
+              error: `args failed validation: ${parsed.error.message}`,
               duration_ms: Date.now() - start,
             }
           }
@@ -583,7 +585,7 @@ export const ExperimentalRoutes = lazy(() =>
             ask: () =>
               EffectCore.fail(
                 new Error(
-                  "permission asks are not yet routed on /experimental/tool/execute — destructive tools cannot run via this path",
+                  "permission asks are not yet routed on /experimental/tool/execute ï¿½ destructive tools cannot run via this path",
                 ) as never,
               ),
           } as any
@@ -629,7 +631,7 @@ export const ExperimentalRoutes = lazy(() =>
       async (c) => {
         c.status(501)
         return c.json({
-          error: "experimental.task.spawn — route stub; implementation pending",
+          error: "experimental.task.spawn ï¿½ route stub; implementation pending",
         })
       },
     )
@@ -652,11 +654,74 @@ export const ExperimentalRoutes = lazy(() =>
         },
       }),
       validator("json", McpInvokeInput),
-      async (c) => {
-        c.status(501)
-        return c.json({
-          error: "experimental.mcp.invoke — route stub; implementation pending",
-        })
-      },
+      async (c) =>
+        jsonRequest("ExperimentalRoutes.mcp.invoke", c, function* () {
+          const body = c.req.valid("json")
+          const start = Date.now()
+
+          // MCP tools are keyed in tools() as sanitize(server) + "_" + sanitize(method).
+          // sanitize matches packages/opencode/src/mcp/index.ts:130.
+          const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+
+          const mcp = yield* MCP.Service
+          const tools = yield* mcp.tools()
+          const key = sanitize(body.server) + "_" + sanitize(body.method)
+          const tool = tools[key]
+          if (!tool) {
+            return {
+              ok: false,
+              output: "",
+              error: `unknown MCP tool '${body.server}.${body.method}' (key='${key}'). Available: ${Object.keys(tools).slice(0, 10).join(", ")}${Object.keys(tools).length > 10 ? " ..." : ""}`,
+              duration_ms: Date.now() - start,
+            }
+          }
+
+          // MCP tools are ai-sdk dynamicTool instances â€” plain async execute(args).
+          // No opencode Context needed; MCP server validates args against its own
+          // JSON Schema at the other end. If params are wrong, the server returns
+          // an error which we surface as ok=false.
+          const execute = (tool as any).execute as
+            | ((args: unknown) => Promise<unknown>)
+            | undefined
+          if (!execute) {
+            return {
+              ok: false,
+              output: "",
+              error: `MCP tool '${body.server}.${body.method}' has no execute handler`,
+              duration_ms: Date.now() - start,
+            }
+          }
+
+          try {
+            const result = yield* EffectCore.promise(() => execute(body.params))
+            // Normalise MCP result to the ToolResult shape. Content-block format
+            // (an array of {text, ...} blocks) is the standard MCP response;
+            // collapse to a single string for output, preserve structured for
+            // dashboard-side parsing.
+            const r = result as any
+            const outputText =
+              typeof r === "string"
+                ? r
+                : Array.isArray(r?.content)
+                  ? r.content
+                      .map((b: any) => (typeof b?.text === "string" ? b.text : JSON.stringify(b)))
+                      .join("\n")
+                  : JSON.stringify(r)
+            return {
+              ok: true,
+              output: outputText,
+              structured: typeof r === "object" ? r : undefined,
+              duration_ms: Date.now() - start,
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            return {
+              ok: false,
+              output: "",
+              error: msg,
+              duration_ms: Date.now() - start,
+            }
+          }
+        }),
     ),
 )
