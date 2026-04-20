@@ -17,4 +17,9 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
-bun typecheck
+# Typecheck only the opencode package — it is the one we actively modify in
+# this fork. The other packages (app, desktop, storybook, console etc.) use
+# tsgo which crashes on Windows, and we do not touch them here. Narrowing
+# the hook keeps its real intent (block broken opencode code) without
+# turning every push into a fight with turbo's concurrency on Windows.
+cd packages/opencode && bun run typecheck
