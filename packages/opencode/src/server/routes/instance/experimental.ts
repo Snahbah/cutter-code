@@ -68,6 +68,10 @@ const ToolExecuteInput = z.object({
     description:
       "Caller-side ID for tying log lines and bus events to this invocation.",
   }),
+  auto_approve_permissions: z.boolean().optional().meta({
+    description:
+      "When true, permission asks raised during tool execution are auto-approved. For trusted callers (cutter-core orchestrator, operational dashboard). Default false — asks are rejected, meaning tools that gate any action (read outside workdir, bash, edit, etc.) will fail.",
+  }),
 })
 
 const ToolResult = z
@@ -586,12 +590,14 @@ export const ExperimentalRoutes = lazy(() =>
             callID: body.correlation_id,
             messages: [],
             metadata: () => EffectCore.void,
-            ask: () =>
-              EffectCore.fail(
-                new Error(
-                  "permission asks are not yet routed on /experimental/tool/execute � destructive tools cannot run via this path",
-                ) as never,
-              ),
+            ask: body.auto_approve_permissions
+              ? () => EffectCore.void
+              : () =>
+                  EffectCore.fail(
+                    new Error(
+                      "permission asks are not yet routed on /experimental/tool/execute. Trusted callers can pass auto_approve_permissions=true; bus-based ask routing comes in a follow-on commit.",
+                    ) as never,
+                  ),
           } as any
 
           try {
