@@ -36,6 +36,88 @@ const ConsoleSwitchBody = z.object({
   orgID: z.string(),
 })
 
+// --- Stream A thin-server schemas (2026-04-20) ---------------------------
+// See cutter-core/docs/stream-a-opencode-gap.md for the full rationale.
+// These routes let callers (cutter-core _think, the operational dashboard)
+// invoke tools / spawn tasks / call MCP servers without triggering OpenCode's
+// own agent loop. Stubs only in this commit — implementations follow.
+
+const ToolExecuteInput = z.object({
+  tool: z.string().meta({
+    description: "Tool name to execute (e.g. bash, read, edit, ha.ha_get_state).",
+  }),
+  args: z.record(z.string(), z.any()).meta({
+    description: "Tool-specific arguments.",
+  }),
+  correlation_id: z.string().optional().meta({
+    description:
+      "Caller-side ID for tying log lines and bus events to this invocation.",
+  }),
+})
+
+const ToolResult = z
+  .object({
+    ok: z.boolean(),
+    output: z.string(),
+    structured: z.any().optional(),
+    error: z.string().optional(),
+    duration_ms: z.number().optional(),
+  })
+  .meta({ ref: "ToolResult" })
+
+const TaskSpawnInput = z.object({
+  description: z.string().meta({
+    description: "Short description of what the task does.",
+  }),
+  prompt: z.string().meta({
+    description: "Prompt to give the child agent.",
+  }),
+  subagent_type: z.string().optional().meta({
+    description:
+      "Agent YAML name to use (e.g. explorer, implementer). Defaults to parent agent config.",
+  }),
+  model: z
+    .object({
+      providerID: ProviderID.zod,
+      modelID: ModelID.zod,
+    })
+    .optional()
+    .meta({ description: "Override the model used by the spawned child." }),
+  correlation_id: z.string().optional(),
+})
+
+const TaskHandle = z
+  .object({
+    task_id: z.string(),
+    session_id: z.string().optional(),
+    spawned_at: z.number().optional(),
+  })
+  .meta({ ref: "TaskHandle" })
+
+const McpInvokeInput = z.object({
+  server: z.string().meta({
+    description: "MCP server name as registered in opencode.json.",
+  }),
+  method: z.string().meta({
+    description: "Method on the MCP server to invoke.",
+  }),
+  params: z.record(z.string(), z.any()),
+  correlation_id: z.string().optional(),
+})
+
+// Stub response for routes that are registered but not yet implemented.
+// Used by the three thin-server routes below until their handlers land.
+const NotImplementedResponse = {
+  501: {
+    description: "Route stub — implementation pending.",
+    content: {
+      "application/json": {
+        schema: resolver(z.object({ error: z.string() })),
+      },
+    },
+  },
+} as const
+
 export const ExperimentalRoutes = lazy(() =>
   new Hono()
     .get(
@@ -404,5 +486,86 @@ export const ExperimentalRoutes = lazy(() =>
           const mcp = yield* MCP.Service
           return yield* mcp.resources()
         }),
+    )
+    // --- Stream A thin-server routes (2026-04-20) ------------------------
+    // Stubs returning 501. Implementations follow in subsequent commits.
+    // Gap analysis: cutter-core/docs/stream-a-opencode-gap.md.
+    .post(
+      "/tool/execute",
+      describeRoute({
+        summary: "Execute a tool (thin-server)",
+        description:
+          "Run a named tool with args, bypassing the agent loop. For callers that have already decided what tool to run (cutter-core _think, operational dashboards). Returns 501 until implementation lands.",
+        operationId: "experimental.tool.execute",
+        responses: {
+          200: {
+            description: "Tool result",
+            content: {
+              "application/json": { schema: resolver(ToolResult) },
+            },
+          },
+          ...NotImplementedResponse,
+          ...errors(400),
+        },
+      }),
+      validator("json", ToolExecuteInput),
+      async (c) => {
+        c.status(501)
+        return c.json({
+          error: "experimental.tool.execute — route stub; implementation pending",
+        })
+      },
+    )
+    .post(
+      "/task/spawn",
+      describeRoute({
+        summary: "Spawn a sub-agent task (thin-server)",
+        description:
+          "Create a sub-agent session and submit a prompt. Returns a handle the caller follows via the event bus. For parent-side orchestration where cutter-core spawns parallel children. Returns 501 until implementation lands.",
+        operationId: "experimental.task.spawn",
+        responses: {
+          200: {
+            description: "Task handle",
+            content: {
+              "application/json": { schema: resolver(TaskHandle) },
+            },
+          },
+          ...NotImplementedResponse,
+          ...errors(400),
+        },
+      }),
+      validator("json", TaskSpawnInput),
+      async (c) => {
+        c.status(501)
+        return c.json({
+          error: "experimental.task.spawn — route stub; implementation pending",
+        })
+      },
+    )
+    .post(
+      "/mcp/invoke",
+      describeRoute({
+        summary: "Invoke an MCP server method directly (thin-server)",
+        description:
+          "Call a named method on a registered MCP server without wrapping in the agent loop. For cutter-core memory and side-channel reaches. Returns 501 until implementation lands.",
+        operationId: "experimental.mcp.invoke",
+        responses: {
+          200: {
+            description: "MCP result",
+            content: {
+              "application/json": { schema: resolver(ToolResult) },
+            },
+          },
+          ...NotImplementedResponse,
+          ...errors(400),
+        },
+      }),
+      validator("json", McpInvokeInput),
+      async (c) => {
+        c.status(501)
+        return c.json({
+          error: "experimental.mcp.invoke — route stub; implementation pending",
+        })
+      },
     ),
 )
